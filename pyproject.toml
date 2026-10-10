@@ -1,0 +1,50 @@
+[project]
+name = "deepseek-v4-experiments"
+version = "0.1.0"
+description = "DeepSeek V4 experiments"
+requires-python = ">=3.12"
+
+# Core deps. torch/torchvision are resolved from the CUDA wheel index below.
+dependencies = [
+  "torch>=2.9",
+  "torchvision>=0.24",
+  # Uncomment if you need it (must match the torch version):
+  # "torchaudio>=2.9",
+
+  # LLM / research stack (remove if you don't need it):
+  "transformers>=4.50",
+  "datasets>=3.0",
+  "accelerate>=1.0",
+  "safetensors>=0.4",
+  "huggingface-hub>=0.27",
+  "einops>=0.8",
+]
+
+[dependency-groups]
+dev = [
+  "ipykernel",
+  "jupyterlab",
+  "matplotlib",
+  "pandas",
+  "numpy",
+  "tqdm",
+  "rich",
+  "pytest",
+]
+
+# ---------------------------------------------------------------- uv config --
+# CUDA 12.8 wheels. Works on RTX 3060 (Ampere, sm_86); needs driver >= 525.
+# Swap cu128 -> cu126/cu129/cu130 to match your driver if needed.
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+# torchaudio = { index = "pytorch-cu128" }
+
+[tool.uv]
+# Use the interpreter devenv puts on PATH; never download a Python.
+python-preference = "only-system"
