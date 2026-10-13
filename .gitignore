@@ -22,3 +22,12 @@ mlruns/
 *.safetensors
 *.pt
 *.ckpt
+
+# Runner output (scripts/run.py)
+*.in.json
+*.out.json
+*.state.json
+
+# Misc
+*.log
+.ruff_cache/

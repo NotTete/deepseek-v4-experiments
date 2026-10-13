@@ -1,100 +1,112 @@
-# DeepSeek V4 experiments — devenv
+# Experimentos con DeepSeek V4
 
-Fast, reproducible Python env powered by **devenv 2.x + uv**, with **CUDA-enabled
-PyTorch** (cu128 wheels) for the RTX 3060 Mobile (Ampere, sm_86).
+Entorno autocontenido para la **atención de DeepSeek-V4-Flash**. El objetivo es
+probar piezas de la Compressed Sparse Attention de DeepSeek-V4-Flash.
 
-## What's in here
 
-| File | Purpose |
-|------|---------|
-| `devenv.nix` | Python 3.12 + uv, `uv sync` on shell entry, CUDA libs on `LD_LIBRARY_PATH` |
-| `pyproject.toml` | Dependencies + the PyTorch cu128 wheel index |
-| `uv.lock` | Fully pinned / hashed resolution (161 pkgs, torch 2.11.0+cu128) |
-| `devenv.lock` | Pins the nixpkgs input |
-| `justfile` | `just sync`, `just lock`, `just add …`, `just gpu` |
+## Instalación
 
-## 1. NVIDIA driver (lives in ~/dotfiles)
+El entorno se gestiona con `uv`. Aunque está devenv para poder correr todo en NixOS.
 
-A devenv cannot ship the CUDA **driver** — `libcuda.so.1` must come from the
-running kernel. This machine (`malenia`) now gets it from the dotfiles flake:
 
-- `~/dotfiles/modules/features/gpu.nix` — fixed so `"nvidia"` is added to
-  `services.xserver.videoDrivers` (nixpkgs only enables the driver when that
-  list contains `"nvidia"`) and a per-host `gpu.nvidia.enable` flag was added.
-- `~/dotfiles/modules/hosts/malenia/configuration.nix` — sets
-  `gpu.nvidia.enable = true` + hybrid offload (iGPU keeps driving the display,
-  `nvidia-offload` for GPU apps).
-- `gpu.compute.enable` stays **false**: no `nixpkgs.config.cudaSupport`, so
-  nothing in nixpkgs is rebuilt.
+## Uso
 
-Deploy it:
+
+**1. Descarga los tensores de atención de las capas CSA** 
 
 ```sh
-sudo nixos-rebuild switch --flake ~/dotfiles#malenia
+python scripts/download_csa_layers.py \
+    --output-dir data/deepseek-v4-flash-csa \
+    --layers 2,4,6            # opcional; por defecto = todas las capas CSA
 ```
 
-Afterwards `nvidia-smi` works and `/run/opengl-driver/lib/libcuda.so.1` exists,
-so the RTX 3060 is usable through the prebuilt PyTorch wheels. If the display
-regresses, set `gpu.hybrid.enable = false` and rebuild — CUDA keeps working.
-
-## 2. Enter the devenv
+**2. Convierte a un único dtype y formatea a la nueva implementación**
 
 ```sh
-cd ~/Research/deepseek-v4-experiments
-devenv shell          # first run downloads torch (a few GB), then it's cached
+python scripts/convert_attention_weights.py \
+    --input-dir  data/deepseek-v4-flash-csa \
+    --output-dir data/deepseek-v4-flash-csa-converted \
+    --dtype bf16
 ```
 
-`uv sync` is **checksum-gated** on `pyproject.toml`, so re-entering the shell is
-instant after the first time.
-
-Or with direnv (optional): install direnv, hook it into your shell, then
-`direnv allow` once — the env activates automatically on `cd`.
-
-## 3. Verify CUDA
+**3. Ejecuta un target e inspecciona el JSON:**
 
 ```sh
-gpu-check     # or: just gpu
+python scripts/run.py module/indexer 10 2 3 1 3 4 2 --range 0.4 \
+    --size real --dtype bf16 \
+    --weights data/deepseek-v4-flash-csa-converted/layer_0002.safetensors \
+    --output idx
 ```
 
-Expected: `cuda build : 12.8`, `available : True`, and your `NVIDIA GeForce
-RTX 3060 ...`.
-
-## Day-to-day
+## Casos de pruebas (`scripts/run.py`)
 
 ```sh
-just add wandb          # uv add + updates uv.lock
-just add-dev pytest-cov
-just lock               # re-resolve
-just sync               # apply lockfile
-uv run python train.py  # run inside the env
+python scripts/run.py <target> <chunks...> [opciones]
 ```
 
-## Tuning CUDA
+- **`<target>`** — `pipeline`, `module/<nombre>`, `kernel/<nombre>`, `<nombre>`
+- **`<chunks...>`** — corre el modelo con secuencias de tokens de la longitud especificada: 10 2 3 1 3 4 2.
 
-- The wheel index is set in `pyproject.toml` (`cu128`). To change CUDA version,
-  edit the index URL + `[tool.uv.sources]`, then `just lock && just sync`.
-  cu128 needs driver ≥ 525; all current NixOS `nvidiaPackages.stable` satisfy it.
-- `torch`/`torchvision` ship their own CUDA runtime/cuDNN/NCCL, so the multi-GB
-  CUDA toolkit is **not** needed for training. If you compile custom kernels
-  (flash-attn, apex…), set `withCudaToolkit = true;` in `devenv.nix` to add
-  `cudaPackages.cudatoolkit` / `cuda_nvcc` and `CUDA_HOME`.
-- `manylinux.enable` + `libraries = [ "/run/opengl-driver/lib" ]` make third-party
-  wheels find the glibc-compatible libs and the driver on NixOS.
+### Targets
 
-## Python version
+| Target | Pieza |
+|--------|-------|
+| `pipeline` / `module/attention` | Capa de atención completa |
+| `module/mqa_proj` | Multi-Query Projection |
+| `module/window_kv` | Window KV |
+| `module/token_compressor` | Token Level Compressor (CSA/HCA) |
+| `module/indexer_compressor` | Indexer Token Level Compressor |
+| `module/indexer` | Indexer (Cheap MQA + top-k) |
+| `module/sparse_attention` | Flash attention (ventana + gather + sink) |
+| `module/output` | Reverse RoPE + reshape + `wo_a`/`wo_b` |
+| `kernel/linear` | `Linear` |
+| `kernel/rmsnorm` | `RMSNorm` |
+| `kernel/weighted_sum` | `WeightedSum` (+ `ape`) |
+| `kernel/hadamard` | `Hadamard` (FWHT) |
+| `kernel/rope` | `RoPE` (+ `precompute_rope_freqs`) |
+| `kernel/safe_attention` | `SafeMultiQueryAttention` |
+| `kernel/cheap_attention` | `CheapMultiQueryAttention` |
 
-Pinned to nixpkgs `python312` (torch wheel support). The venv lives in
-`.devenv/state/venv`; `uv` never downloads its own interpreter
-(`UV_PYTHON_DOWNLOADS=never`).
+### Opciones
 
-## FAQ
+| Opción | Significado |
+|--------|-------------|
+| `--range X` | rango de entrada simétrico `[-X, X]` al samplear tokens aleatorios |
+| `--range A B` | rango de entrada `[A, B]` (default: `1` → `[-1, 1]`) |
+| `-o, --output F` | prefijo de los JSON de salida (default `output`) |
+| `--seed N` | semilla; **aleatoria por defecto** (se imprime la elegida) |
+| `--weights FILE` | `.safetensors` de la capa a cargar; **obligatorio** en `pipeline`/`module/*` (las claves de una pieza se recortan por su prefijo) |
+| `--random` | usa pesos sintéticos en vez de `--weights` |
+| `--size tiny\|real` | preset de config (`tiny` para pruebas rápidas en CPU, `real` = dims de V4 flash) |
+| `--layer-type csa\|hca\|window` | tipo de atención (ratio 4 / 128 / 0) |
+| `--dtype fp16\|fp32\|bf16` | dtype de cómputo |
+| `--device` | `cuda` si está disponible, si no `cpu` |
+| `--ratio N` | sobreescribe el ratio del compresor |
 
-**Does this recompile my programs with CUDA?**
-No. `nixpkgs.config.cudaSupport` is intentionally **not** set. CUDA is provided
-by prebuilt PyTorch pip wheels (via uv) plus the prebuilt NVIDIA driver binary.
-No nixpkgs package is rebuilt. If you ever see thousands of builds queued, you
-(or another module) enabled `cudaSupport` — remove it.
+### Salida
 
-**What actually uses the GPU at runtime?**
-torch `dlopen`s `libcuda.so.1` from the host driver; the wheel bundles the CUDA
-runtime, cuDNN, and NCCL. That's why the host only needs the driver.
+Cada ejecución escribe tres ficheros JSON legibles:
+
+- **`<output>.in.json`** — la secuencia de entrada: un vector por token, más la
+  config, el schedule, la semilla y el rango.
+- **`<output>.out.json`** — la salida procesada **por token, paso a paso**
+  (kind, longitud, posición de inicio, filas de salida).
+- **`<output>.state.json`** — el estado de **todos los buffers** tras el run
+  (shape, dtype, `finite` y valores).
+
+### Ejemplos
+
+```sh
+# capa completa con los pesos reales
+python scripts/run.py pipeline p12 p8 d1 d1 d4 --size real --dtype bf16 \
+    --weights data/deepseek-v4-flash-csa-converted/layer_0002.safetensors --output run1
+
+# una pieza, rango simétrico [-0.4, 0.4]
+python scripts/run.py module/indexer 10 2 3 1 3 4 2 --range 0.4 --random --output idx
+
+# dos conversaciones independientes (reset en medio)
+python scripts/run.py pipeline p16 d4 r p10 d6 --random --output conv
+
+# un kernel de bajo nivel (no usa pesos de capa)
+python scripts/run.py kernel/rope 8 --dtype fp32 --output rope
+```

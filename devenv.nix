@@ -25,7 +25,6 @@ in
   # ------------------------------- Packages -------------------------------
   packages = with pkgs; [
     git
-    just
   ] ++ lib.optionals withCudaToolkit [
     cudaPackages.cudatoolkit
     cudaPackages.cuda_nvcc
