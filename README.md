@@ -14,7 +14,7 @@ El entorno se gestiona con `uv`. Aunque está devenv para poder correr todo en N
 
 **1. Descarga los tensores de atención de las capas CSA** 
 
-```sh
+```bash
 python scripts/download_csa_layers.py \
     --output-dir data/deepseek-v4-flash-csa \
     --layers 2,4,6            # opcional; por defecto = todas las capas CSA
@@ -22,7 +22,7 @@ python scripts/download_csa_layers.py \
 
 **2. Convierte a un único dtype y formatea a la nueva implementación**
 
-```sh
+```bash
 python scripts/convert_attention_weights.py \
     --input-dir  data/deepseek-v4-flash-csa \
     --output-dir data/deepseek-v4-flash-csa-converted \
@@ -31,7 +31,7 @@ python scripts/convert_attention_weights.py \
 
 **3. Ejecuta un target e inspecciona el JSON:**
 
-```sh
+```bash
 python scripts/run.py module/indexer 10 2 3 1 3 4 2 --range 0.4 \
     --size real --dtype bf16 \
     --weights data/deepseek-v4-flash-csa-converted/layer_0002.safetensors \
@@ -40,7 +40,7 @@ python scripts/run.py module/indexer 10 2 3 1 3 4 2 --range 0.4 \
 
 ## Casos de pruebas (`scripts/run.py`)
 
-```sh
+```bash
 python scripts/run.py <target> <chunks...> [opciones]
 ```
 
@@ -96,7 +96,7 @@ Cada ejecución escribe tres ficheros JSON legibles:
 
 ### Ejemplos
 
-```sh
+```bash
 # capa completa con los pesos reales
 python scripts/run.py pipeline p12 p8 d1 d1 d4 --size real --dtype bf16 \
     --weights data/deepseek-v4-flash-csa-converted/layer_0002.safetensors --output run1
